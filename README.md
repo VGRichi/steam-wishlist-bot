@@ -1,4 +1,4 @@
-# Steam Genie Bot
+# Steam Wishlist Bot
 
 A Telegram bot that watches your Steam wishlist and pings you the moment a
 tracked game goes on sale. Runs entirely on free tiers (Vercel + Supabase +
