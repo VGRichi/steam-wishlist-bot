@@ -1,0 +1,16 @@
+{
+  "name": "steam-genie-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot that alerts users when Steam wishlist games go on sale",
+  "main": "index.js",
+  "scripts": {
+    "set-webhook": "node scripts/set-webhook.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.5"
+  }
+}
