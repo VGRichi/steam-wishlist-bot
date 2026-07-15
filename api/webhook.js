@@ -39,60 +39,79 @@ module.exports = async (req, res) => {
   res.status(200).send('ok');
 };
 
+const MENU = {
+  LIST: '📋 My List',
+  ADD: '➕ Add Game',
+  CHECK: '🔄 Check Now',
+  REMOVE: '➖ Remove Game',
+  CLEAR: '🗑 Clear List',
+  REGION_PREFIX: '🌍 Set Region',
+};
+
+async function buildMainMenu(chatId) {
+  const user = await db.getUser(chatId);
+  const flag = user && user.region_code ? tg.flagEmoji(user.region_code) : '🏳️';
+  return tg.replyKeyboard([
+    [MENU.LIST, MENU.ADD],
+    [MENU.CHECK, MENU.REMOVE],
+    [MENU.CLEAR, `${MENU.REGION_PREFIX} ${flag}`],
+  ]);
+}
+
 async function handleMessage(message) {
   const chatId = message.chat.id;
   const text = (message.text || '').trim();
 
-  if (text.startsWith('/start')) {
+  if (text === '/start') {
     await db.setPendingAction(chatId, 'awaiting_region');
     await tg.sendMessage(chatId, WELCOME);
     return;
   }
 
-  if (text.startsWith('/help')) {
-    await tg.sendMessage(chatId, HELP);
+  if (text === MENU.LIST) {
+    await handleMyList(chatId);
     return;
   }
 
-  if (text.startsWith('/setregion')) {
+  if (text === MENU.ADD) {
+    await db.setPendingAction(chatId, 'awaiting_addgame_query');
+    await tg.sendMessage(chatId, 'Type the name of the game to search for:');
+    return;
+  }
+
+  if (text === MENU.CHECK) {
+    await handleCheckNow(chatId);
+    return;
+  }
+
+  if (text === MENU.REMOVE) {
+    await handleRemoveGameMenu(chatId);
+    return;
+  }
+
+  if (text === MENU.CLEAR) {
+    await handleClearListConfirm(chatId);
+    return;
+  }
+
+  if (text.startsWith(MENU.REGION_PREFIX)) {
     await db.setPendingAction(chatId, 'awaiting_region');
     await tg.sendMessage(chatId, 'What region/country code should I use? (e.g. US, TR, AZ, DE)');
     return;
   }
 
-  if (text.startsWith('/addgame')) {
-    await handleAddGame(chatId, text.replace('/addgame', '').trim());
-    return;
-  }
-
-  if (text.startsWith('/mylist')) {
-    await handleMyList(chatId);
-    return;
-  }
-
-  if (text.startsWith('/removegame')) {
-    await handleRemoveGameMenu(chatId);
-    return;
-  }
-
-  if (text.startsWith('/checknow')) {
-    await handleCheckNow(chatId);
-    return;
-  }
-
-  if (text.startsWith('/clearlist')) {
-    await handleClearListConfirm(chatId);
-    return;
-  }
-
-  // Not a command - check if we're mid-conversation waiting for a region code
   const user = await db.getUser(chatId);
   if (user && user.pending_action === 'awaiting_region') {
     await handleRegionInput(chatId, text);
     return;
   }
+  if (user && user.pending_action === 'awaiting_addgame_query') {
+    await db.setPendingAction(chatId, null);
+    await handleAddGame(chatId, text);
+    return;
+  }
 
-  await tg.sendMessage(chatId, "Not sure what you mean. Send /help to see what I can do.");
+  await tg.sendMessage(chatId, "Not sure what you mean - use the menu buttons below.", await buildMainMenu(chatId));
 }
 
 async function handleRegionInput(chatId, text) {
@@ -105,7 +124,7 @@ async function handleRegionInput(chatId, text) {
     await tg.sendMessage(chatId, `⚠️ I don't recognize "${code}" as a common region, but I'll use it anyway - let me know if prices look wrong.`);
   }
   await db.upsertUserRegion(chatId, code);
-  await tg.sendMessage(chatId, `✅ Region set to ${code}.\n\n${HELP}`);
+  await tg.sendMessage(chatId, `✅ Region set to ${code}.`, await buildMainMenu(chatId));
 }
 
 async function handleAddGame(chatId, query) {
