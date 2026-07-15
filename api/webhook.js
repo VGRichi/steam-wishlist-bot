@@ -13,7 +13,9 @@ const HELP = `Here's what I can do:
 
 /addgame &lt;name&gt; — search and track a game (max ${db.MAX_GAMES_PER_USER})
 /mylist — see your tracked games
+/checknow — check current prices right now (doesn't wait for the daily check)
 /removegame — stop tracking a game
+/clearlist — remove ALL tracked games (asks to confirm)
 /setregion — change your region/currency
 /help — show this again`;
 
@@ -70,6 +72,16 @@ async function handleMessage(message) {
 
   if (text.startsWith('/removegame')) {
     await handleRemoveGameMenu(chatId);
+    return;
+  }
+
+  if (text.startsWith('/checknow')) {
+    await handleCheckNow(chatId);
+    return;
+  }
+
+  if (text.startsWith('/clearlist')) {
+    await handleClearListConfirm(chatId);
     return;
   }
 
@@ -177,7 +189,71 @@ async function handleCallback(callbackQuery) {
     return;
   }
 
+  if (data === 'clearlist:confirm') {
+    await db.clearTrackedGames(chatId);
+    await tg.answerCallbackQuery(callbackQuery.id, 'Cleared.');
+    await tg.sendMessage(chatId, '✅ Your tracked games list is now empty.');
+    return;
+  }
+
+  if (data === 'clearlist:cancel') {
+    await tg.answerCallbackQuery(callbackQuery.id, 'Cancelled.');
+    await tg.sendMessage(chatId, 'No changes made.');
+    return;
+  }
+
   await tg.answerCallbackQuery(callbackQuery.id);
+}
+
+async function handleCheckNow(chatId) {
+  const games = await db.getTrackedGames(chatId);
+  if (!games.length) {
+    await tg.sendMessage(chatId, "You're not tracking any games yet. Use /addgame <name> to start.");
+    return;
+  }
+
+  const user = await db.getUser(chatId);
+  const region = (user && user.region_code) || 'US';
+
+  await tg.sendMessage(chatId, `Checking ${games.length} game(s), one sec...`);
+
+  const lines = [];
+  for (const game of games) {
+    try {
+      const details = await steam.getAppDetails(game.app_id, region);
+      if (!details) {
+        lines.push(`❓ ${game.game_name} — couldn't fetch right now`);
+      } else if (details.discountPercent > 0) {
+        const priceText = steam.formatPrice(details.priceCents, details.currency);
+        lines.push(`🔥 ${details.name} — ${details.discountPercent}% off, now ${priceText}`);
+      } else {
+        const priceText = details.isFree ? 'Free' : steam.formatPrice(details.priceCents, details.currency);
+        lines.push(`— ${details.name} — no sale (${priceText})`);
+      }
+    } catch (err) {
+      console.error(`checknow error for app ${game.app_id}:`, err);
+      lines.push(`❓ ${game.game_name} — error checking`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  await tg.sendMessage(chatId, lines.join('\n'));
+}
+
+async function handleClearListConfirm(chatId) {
+  const games = await db.getTrackedGames(chatId);
+  if (!games.length) {
+    await tg.sendMessage(chatId, "You're not tracking anything - nothing to clear.");
+    return;
+  }
+  await tg.sendMessage(
+    chatId,
+    `This will remove all ${games.length} tracked game(s). Are you sure?`,
+    tg.inlineKeyboard([
+      { text: '✅ Yes, clear my list', callback_data: 'clearlist:confirm' },
+      { text: '❌ Cancel', callback_data: 'clearlist:cancel' },
+    ])
+  );
 }
 
 async function confirmAddGame(chatId, appId, callbackQueryId) {
