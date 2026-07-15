@@ -217,25 +217,42 @@ async function handleCheckNow(chatId) {
 
   await tg.sendMessage(chatId, `Checking ${games.length} game(s), one sec...`);
 
-  const lines = [];
+  const checked = [];
   for (const game of games) {
     try {
       const details = await steam.getAppDetails(game.app_id, region);
-      if (!details) {
-        lines.push(`❓ ${game.game_name} — couldn't fetch right now`);
-      } else if (details.discountPercent > 0) {
-        const priceText = steam.formatPrice(details.priceCents, details.currency);
-        lines.push(`🔥 ${details.name} — ${details.discountPercent}% off, now ${priceText}`);
-      } else {
-        const priceText = details.isFree ? 'Free' : steam.formatPrice(details.priceCents, details.currency);
-        lines.push(`— ${details.name} — no sale (${priceText})`);
-      }
+      checked.push({ game, details, error: false });
     } catch (err) {
       console.error(`checknow error for app ${game.app_id}:`, err);
-      lines.push(`❓ ${game.game_name} — error checking`);
+      checked.push({ game, details: null, error: true });
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+
+  // Discounted games first (biggest discount on top), then everything else in the order they were originally tracked.
+  checked.sort((a, b) => {
+    const discountA = a.details ? a.details.discountPercent : -1;
+    const discountB = b.details ? b.details.discountPercent : -1;
+    return discountB - discountA;
+  });
+
+  const lines = checked.map((entry, index) => {
+    const num = index + 1;
+    const { game, details, error } = entry;
+    if (error || !details) {
+      return `${num}. ❓ ${game.game_name} — couldn't fetch right now`;
+    }
+    if (details.discountPercent > 0) {
+      const priceText = steam.formatPrice(details.priceCents, details.currency);
+      let line = `${num}. 🔥 ${details.name} — ${details.discountPercent}% off, now ${priceText}`;
+      if (details.discountPercent >= 50) {
+        line += ` — Buy now: ${steam.appStoreUrl(game.app_id)}`;
+      }
+      return line;
+    }
+    const priceText = details.isFree ? 'Free' : steam.formatPrice(details.priceCents, details.currency);
+    return `${num}. — ${details.name} — no sale (${priceText})`;
+  });
 
   await tg.sendMessage(chatId, lines.join('\n'));
 }
