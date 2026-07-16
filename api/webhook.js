@@ -80,6 +80,15 @@ async function handleMessage(message) {
     return;
   }
 
+  if (user && user.pending_action === 'awaiting_percent_value') {
+    await handlePercentInput(chatId, text, user.pending_data);
+    return;
+  }
+  if (user && user.pending_action === 'awaiting_price_value') {
+    await handlePriceInput(chatId, text, user.pending_data);
+    return;
+  }
+
   await tg.sendMessage(chatId, "Not sure what you mean. Send /help to see what I can do.");
 }
 
@@ -159,6 +168,102 @@ async function handleRemoveGameMenu(chatId) {
   await tg.sendMessage(chatId, 'Tap a game to stop tracking it:', tg.inlineKeyboard(buttons));
 }
 
+async function handleFilterChoice(chatId, choice, callbackQueryId) {
+  const user = await db.getUser(chatId);
+  const pending = user && user.pending_data;
+  if (!pending || !pending.appId) {
+    await tg.answerCallbackQuery(callbackQueryId, 'Something went wrong - try adding the game again.');
+    return;
+  }
+
+  await tg.answerCallbackQuery(callbackQueryId);
+
+  if (choice === 'filter:any') {
+    await finalizeAddGame(chatId, pending.appId, pending.gameName, null, null);
+    return;
+  }
+  if (choice === 'filter:percent') {
+    await db.setPendingAction(chatId, 'awaiting_percent_value', { ...pending, needsPriceAfter: false });
+    await tg.sendMessage(chatId, 'Type the discount % to notify at (e.g. 30 for 30% off or more):');
+    return;
+  }
+  if (choice === 'filter:price') {
+    await db.setPendingAction(chatId, 'awaiting_price_value', { ...pending, needsPriceAfter: false });
+    await tg.sendMessage(chatId, "Type the price to notify below, in your region's currency (e.g. 15):");
+    return;
+  }
+  if (choice === 'filter:both') {
+    await db.setPendingAction(chatId, 'awaiting_percent_value', { ...pending, needsPriceAfter: true });
+    await tg.sendMessage(chatId, 'Type the discount % threshold first (e.g. 30):');
+    return;
+  }
+}
+
+async function finalizeAddGame(chatId, appId, gameName, thresholdPercent, thresholdPriceCents) {
+  const user = await db.getUser(chatId);
+  const region = (user && user.region_code) || 'US';
+
+  let initialConditionMet = false;
+  try {
+    const details = await steam.getAppDetails(appId, region);
+    if (details) {
+      initialConditionMet = steam.meetsCondition(thresholdPercent, thresholdPriceCents, details.discountPercent, details.priceCents);
+    }
+  } catch (err) {
+    console.error('finalizeAddGame price check failed:', err);
+  }
+
+  const result = await db.addTrackedGame(chatId, appId, gameName, {
+    thresholdPercent,
+    thresholdPriceCents,
+    initialConditionMet,
+  });
+
+  await db.setPendingAction(chatId, null, null);
+
+  if (result.reason === 'duplicate') {
+    await tg.sendMessage(chatId, `Already tracking <b>${gameName}</b>.`);
+    return;
+  }
+  if (result.reason === 'limit') {
+    await tg.sendMessage(chatId, `You're at the max of ${db.MAX_GAMES_PER_USER} games. Remove one first with /removegame.`);
+    return;
+  }
+
+  let msg = `✅ Now tracking: <b>${gameName}</b>`;
+  if (thresholdPercent != null) msg += `\nNotify at ${thresholdPercent}%+ off`;
+  if (thresholdPriceCents != null) msg += `\nNotify below ${steam.formatPrice(thresholdPriceCents, '')}`;
+  if (thresholdPercent == null && thresholdPriceCents == null) msg += `\nNotify on any discount`;
+  if (initialConditionMet) msg += `\n\n🔥 Heads up - it already meets this right now!`;
+
+  await tg.sendMessage(chatId, msg);
+}
+
+async function handlePercentInput(chatId, text, pending) {
+  const value = parseInt(text.trim().replace('%', ''), 10);
+  if (isNaN(value) || value <= 0 || value > 100) {
+    await tg.sendMessage(chatId, 'Please type a number between 1 and 100 (e.g. 30).');
+    return;
+  }
+  if (pending.needsPriceAfter) {
+    await db.setPendingAction(chatId, 'awaiting_price_value', { ...pending, thresholdPercent: value, needsPriceAfter: false });
+    await tg.sendMessage(chatId, `Got it - ${value}%. Now type the price threshold too (e.g. 15):`);
+    return;
+  }
+  await finalizeAddGame(chatId, pending.appId, pending.gameName, value, null);
+}
+
+async function handlePriceInput(chatId, text, pending) {
+  const value = parseFloat(text.trim().replace(/[^0-9.]/g, ''));
+  if (isNaN(value) || value <= 0) {
+    await tg.sendMessage(chatId, 'Please type a valid price (e.g. 15 or 15.99).');
+    return;
+  }
+  const cents = Math.round(value * 100);
+  const percentAlreadySet = pending.thresholdPercent != null ? pending.thresholdPercent : null;
+  await finalizeAddGame(chatId, pending.appId, pending.gameName, percentAlreadySet, cents);
+}
+
 async function handleCallback(callbackQuery) {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data || '';
@@ -177,6 +282,11 @@ async function handleCallback(callbackQuery) {
     return;
   }
 
+  if (data.startsWith('filter:')) {
+    await handleFilterChoice(chatId, data, callbackQuery.id);
+    return;
+  }
+
   await tg.answerCallbackQuery(callbackQuery.id);
 }
 
@@ -190,17 +300,31 @@ async function confirmAddGame(chatId, appId, callbackQueryId) {
     return;
   }
 
-  const result = await db.addTrackedGame(chatId, appId, details.name);
-  await tg.answerCallbackQuery(callbackQueryId);
-
-  if (result.reason === 'duplicate') {
+  const already = await db.isTrackingGame(chatId, appId);
+  if (already) {
+    await tg.answerCallbackQuery(callbackQueryId);
     await tg.sendMessage(chatId, `Already tracking <b>${details.name}</b>.`);
     return;
   }
-  if (result.reason === 'limit') {
+
+  const count = await db.countTrackedGames(chatId);
+  if (count >= db.MAX_GAMES_PER_USER) {
+    await tg.answerCallbackQuery(callbackQueryId);
     await tg.sendMessage(chatId, `You're at the max of ${db.MAX_GAMES_PER_USER} games. Remove one first with /removegame.`);
     return;
   }
 
-  await tg.sendMessage(chatId, `✅ Now tracking: <b>${details.name}</b>\nI'll ping you here when it goes on sale.`);
+  await tg.answerCallbackQuery(callbackQueryId);
+  await db.setPendingAction(chatId, 'awaiting_filter_choice', { appId, gameName: details.name });
+
+  await tg.sendMessage(
+    chatId,
+    `<b>${details.name}</b> - how should I notify you?`,
+    tg.inlineKeyboard([
+      { text: '🔔 Any discount', callback_data: 'filter:any' },
+      { text: '📊 % threshold', callback_data: 'filter:percent' },
+      { text: '💰 Price threshold', callback_data: 'filter:price' },
+      { text: '🎯 Both (either triggers)', callback_data: 'filter:both' },
+    ])
+  );
 }

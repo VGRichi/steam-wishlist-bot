@@ -22,7 +22,7 @@ module.exports = async (req, res) => {
   }
 
   const pairs = await db.getDistinctAppRegionPairs();
-  const results = { checked: 0, notified: 0, errors: 0, baselined: 0 };
+  const results = { checked: 0, notified: 0, errors: 0 };
 
   for (const { appId, region } of pairs) {
     try {
@@ -36,24 +36,28 @@ module.exports = async (req, res) => {
         continue;
       }
 
-      const cache = await db.getPriceCache(appId, region);
-      const wasOnSale = cache ? cache.last_discount_percent > 0 : null;
-      const isOnSale = details.discountPercent > 0;
+     const rows = await db.getTrackedGameRowsForAppRegion(appId, region);
+      const priceText = steam.formatPrice(details.priceCents, details.currency);
 
-      // First time we've ever checked this (app, region) pair - record it as
-      // a baseline only. Notifying here would falsely alert on games that
-      // were already on sale before anyone started tracking them.
-      if (cache === null) {
-        results.baselined++;
-      } else if (!wasOnSale && isOnSale) {
-        // Transition from not-on-sale to on-sale - this is the real signal.
-        const chatIds = await db.getUsersTrackingGameInRegion(appId, region);
-        const priceText = formatPrice(details.priceCents, details.currency);
-        const msg = `🔥 <b>${details.name}</b> is on sale!\n${details.discountPercent}% off - now ${priceText}`;
-        for (const chatId of chatIds) {
-          await tg.sendMessage(chatId, msg);
+      for (const row of rows) {
+        const conditionMet = steam.meetsCondition(
+          row.threshold_percent,
+          row.threshold_price_cents,
+          details.discountPercent,
+          details.priceCents
+        );
+
+        if (conditionMet && !row.last_condition_met) {
+          let msg = `🔥 <b>${details.name}</b> matches your alert!\n`;
+          msg += details.discountPercent > 0
+            ? `${details.discountPercent}% off - now ${priceText}`
+            : `Now ${priceText}`;
+          await tg.sendMessage(row.chat_id, msg);
+          await db.updateConditionMet(row.id, true);
+          results.notified++;
+        } else if (!conditionMet && row.last_condition_met) {
+          await db.updateConditionMet(row.id, false);
         }
-        results.notified += chatIds.length;
       }
 
       await db.upsertPriceCache(appId, region, details.priceCents, details.discountPercent);
