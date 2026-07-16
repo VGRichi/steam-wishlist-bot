@@ -1,5 +1,3 @@
--- Run this once in Supabase's SQL editor to set up the required tables.
-
 create table if not exists users (
   chat_id bigint primary key,
   region_code text,

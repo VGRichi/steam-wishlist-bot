@@ -8,14 +8,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatPrice(cents, currency) {
-  if (cents == null) return 'unknown price';
-  return `${(cents / 100).toFixed(2)} ${currency || ''}`.trim();
-}
-
 module.exports = async (req, res) => {
   // Protect this endpoint - only Vercel Cron (or us) should be able to trigger it,
-  // otherwise anyone with the URL could spam Steam's API through our job.
   const auth = req.headers['authorization'];
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).send('unauthorized');
@@ -31,7 +25,6 @@ module.exports = async (req, res) => {
 
       if (!details) {
         // Delisted, removed, or not available in this region - skip silently,
-        // nothing sensible to notify about.
         await sleep(DELAY_MS);
         continue;
       }
@@ -39,7 +32,7 @@ module.exports = async (req, res) => {
      const rows = await db.getTrackedGameRowsForAppRegion(appId, region);
       const priceText = steam.formatPrice(details.priceCents, details.currency);
 
-      for (const row of rows) {
+for (const row of rows) {
         const conditionMet = steam.meetsCondition(
           row.threshold_percent,
           row.threshold_price_cents,

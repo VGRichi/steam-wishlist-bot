@@ -1,5 +1,3 @@
-// Run this once after deploying to Vercel:
-//   node scripts/set-webhook.js https://your-project.vercel.app
 require('dotenv').config();
 const fetch = require('node-fetch');
 

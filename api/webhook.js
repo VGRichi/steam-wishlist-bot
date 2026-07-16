@@ -13,7 +13,9 @@ const HELP = `Here's what I can do:
 
 /addgame &lt;name&gt; — search and track a game (max ${db.MAX_GAMES_PER_USER})
 /mylist — see your tracked games
+/checknow — check current prices right now (doesn't wait for the daily check)
 /removegame — stop tracking a game
+/clearlist — remove ALL tracked games (asks to confirm)
 /setregion — change your region/currency
 /help — show this again`;
 
@@ -37,50 +39,79 @@ module.exports = async (req, res) => {
   res.status(200).send('ok');
 };
 
+const MENU = {
+  LIST: '📋 My List',
+  ADD: '➕ Add Game',
+  CHECK: '🔄 Check Now',
+  REMOVE: '➖ Remove Game',
+  CLEAR: '🗑 Clear List',
+  REGION_PREFIX: '🌍 Set Region',
+};
+
+async function buildMainMenu(chatId) {
+  const user = await db.getUser(chatId);
+  const flag = user && user.region_code ? tg.flagEmoji(user.region_code) : '🏳️';
+  return tg.replyKeyboard([
+    [MENU.LIST, MENU.ADD],
+    [MENU.CHECK, MENU.REMOVE],
+    [MENU.CLEAR, `${MENU.REGION_PREFIX} ${flag}`],
+  ]);
+}
+
 async function handleMessage(message) {
   const chatId = message.chat.id;
   const text = (message.text || '').trim();
 
-  if (text.startsWith('/start')) {
+  if (text === '/start') {
     await db.setPendingAction(chatId, 'awaiting_region');
     await tg.sendMessage(chatId, WELCOME);
     return;
   }
 
-  if (text.startsWith('/help')) {
-    await tg.sendMessage(chatId, HELP);
+  if (text === MENU.LIST) {
+    await handleMyList(chatId);
     return;
   }
 
-  if (text.startsWith('/setregion')) {
+  if (text === MENU.ADD) {
+    await db.setPendingAction(chatId, 'awaiting_addgame_query');
+    await tg.sendMessage(chatId, 'Type the name of the game to search for:');
+    return;
+  }
+
+  if (text === MENU.CHECK) {
+    await handleCheckNow(chatId);
+    return;
+  }
+
+  if (text === MENU.REMOVE) {
+    await handleRemoveGameMenu(chatId);
+    return;
+  }
+
+  if (text === MENU.CLEAR) {
+    await handleClearListConfirm(chatId);
+    return;
+  }
+
+  if (text.startsWith(MENU.REGION_PREFIX)) {
     await db.setPendingAction(chatId, 'awaiting_region');
     await tg.sendMessage(chatId, 'What region/country code should I use? (e.g. US, TR, AZ, DE)');
     return;
   }
 
-  if (text.startsWith('/addgame')) {
-    await handleAddGame(chatId, text.replace('/addgame', '').trim());
-    return;
-  }
-
-  if (text.startsWith('/mylist')) {
-    await handleMyList(chatId);
-    return;
-  }
-
-  if (text.startsWith('/removegame')) {
-    await handleRemoveGameMenu(chatId);
-    return;
-  }
-
-  // Not a command - check if we're mid-conversation waiting for a region code
   const user = await db.getUser(chatId);
   if (user && user.pending_action === 'awaiting_region') {
     await handleRegionInput(chatId, text);
     return;
   }
+  if (user && user.pending_action === 'awaiting_addgame_query') {
+    await db.setPendingAction(chatId, null);
+    await handleAddGame(chatId, text);
+    return;
+  }
 
-  if (user && user.pending_action === 'awaiting_percent_value') {
+if (user && user.pending_action === 'awaiting_percent_value') {
     await handlePercentInput(chatId, text, user.pending_data);
     return;
   }
@@ -89,8 +120,7 @@ async function handleMessage(message) {
     return;
   }
 
-  await tg.sendMessage(chatId, "Not sure what you mean. Send /help to see what I can do.");
-}
+  await tg.sendMessage(chatId, "Not sure what you mean - use the menu buttons below.", await buildMainMenu(chatId));
 
 async function handleRegionInput(chatId, text) {
   const code = text.trim().toUpperCase();
@@ -102,7 +132,7 @@ async function handleRegionInput(chatId, text) {
     await tg.sendMessage(chatId, `⚠️ I don't recognize "${code}" as a common region, but I'll use it anyway - let me know if prices look wrong.`);
   }
   await db.upsertUserRegion(chatId, code);
-  await tg.sendMessage(chatId, `✅ Region set to ${code}.\n\n${HELP}`);
+  await tg.sendMessage(chatId, `✅ Region set to ${code}.`, await buildMainMenu(chatId));
 }
 
 async function handleAddGame(chatId, query) {
@@ -282,12 +312,93 @@ async function handleCallback(callbackQuery) {
     return;
   }
 
-  if (data.startsWith('filter:')) {
+if (data.startsWith('filter:')) {
     await handleFilterChoice(chatId, data, callbackQuery.id);
     return;
   }
 
+  if (data === 'clearlist:confirm') {
+    await db.clearTrackedGames(chatId);
+    await tg.answerCallbackQuery(callbackQuery.id, 'Cleared.');
+    await tg.sendMessage(chatId, '✅ Your tracked games list is now empty.');
+    return;
+  }
+
+  if (data === 'clearlist:cancel') {
+    await tg.answerCallbackQuery(callbackQuery.id, 'Cancelled.');
+    await tg.sendMessage(chatId, 'No changes made.');
+    return;
+  }
+
   await tg.answerCallbackQuery(callbackQuery.id);
+}
+
+async function handleCheckNow(chatId) {
+  const games = await db.getTrackedGames(chatId);
+  if (!games.length) {
+    await tg.sendMessage(chatId, "You're not tracking any games yet. Use /addgame <name> to start.");
+    return;
+  }
+
+  const user = await db.getUser(chatId);
+  const region = (user && user.region_code) || 'US';
+
+  await tg.sendMessage(chatId, `Checking ${games.length} game(s), one sec...`);
+
+  const checked = [];
+  for (const game of games) {
+    try {
+      const details = await steam.getAppDetails(game.app_id, region);
+      checked.push({ game, details, error: false });
+    } catch (err) {
+      console.error(`checknow error for app ${game.app_id}:`, err);
+      checked.push({ game, details: null, error: true });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  // Discounted games first (biggest discount on top), then everything else in the order they were originally tracked.
+  checked.sort((a, b) => {
+    const discountA = a.details ? a.details.discountPercent : -1;
+    const discountB = b.details ? b.details.discountPercent : -1;
+    return discountB - discountA;
+  });
+
+  const lines = checked.map((entry, index) => {
+    const num = index + 1;
+    const { game, details, error } = entry;
+    if (error || !details) {
+      return `${num}. ❓ ${game.game_name} — couldn't fetch right now`;
+    }
+    if (details.discountPercent > 0) {
+      const priceText = steam.formatPrice(details.priceCents, details.currency);
+      let line = `${num}. 🔥 ${details.name} — ${details.discountPercent}% off, now ${priceText}`;
+      if (details.discountPercent >= 50) {
+        line += ` — Buy now: ${steam.appStoreUrl(game.app_id)}`;
+      }
+      return line;
+    }
+    const priceText = details.isFree ? 'Free' : steam.formatPrice(details.priceCents, details.currency);
+    return `${num}. — ${details.name} — no sale (${priceText})`;
+  });
+
+  await tg.sendMessage(chatId, lines.join('\n'));
+}
+
+async function handleClearListConfirm(chatId) {
+  const games = await db.getTrackedGames(chatId);
+  if (!games.length) {
+    await tg.sendMessage(chatId, "You're not tracking anything - nothing to clear.");
+    return;
+  }
+  await tg.sendMessage(
+    chatId,
+    `This will remove all ${games.length} tracked game(s). Are you sure?`,
+    tg.inlineKeyboard([
+      { text: '✅ Yes, clear my list', callback_data: 'clearlist:confirm' },
+      { text: '❌ Cancel', callback_data: 'clearlist:cancel' },
+    ])
+  );
 }
 
 async function confirmAddGame(chatId, appId, callbackQueryId) {
