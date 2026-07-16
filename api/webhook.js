@@ -121,6 +121,7 @@ if (user && user.pending_action === 'awaiting_percent_value') {
   }
 
   await tg.sendMessage(chatId, "Not sure what you mean - use the menu buttons below.", await buildMainMenu(chatId));
+}
 
 async function handleRegionInput(chatId, text) {
   const code = text.trim().toUpperCase();
