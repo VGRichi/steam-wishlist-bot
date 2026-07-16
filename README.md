@@ -1,30 +1,53 @@
-# Steam Wishlist Bot
+# Steam Wishlist Bot 🧞
 
-A Telegram bot that watches your Steam wishlist and pings you the moment a
-specific tracked game goes on sale.
+A free Telegram bot that watches your Steam wishlist and pings you the
+moment a game goes on sale - with custom alert rules per game, so you only
+hear about the deals you actually care about.
 
-## How it works
+## Get started
 
-- `/api/webhook` - responds instantly when a user messages the bot
-  (add/remove games, set region). Deployed as a Vercel serverless function.
-- `/api/cron` - runs every 24 hours, checks Steam prices for every tracked
-  game (once per app+region combo, shared across all users), and notifies
-  anyone whose game just went on sale.
-- Supabase (Postgres) stores users, tracked games, and last-known prices.
+Just open the bot on Telegram and send `/start`. You'll be asked for your
+region/country code (e.g. `US`, `TR`, `AZ`, `DE`) so prices are checked in
+your local currency, then you're ready to go.
 
-## Test it
+Everything after that is done through the button menu - no commands to
+memorize.
 
-Message your bot on Telegram: `/start`
+## What it does
 
-## Limits (MVP1)
+- **📋 My List** - see your tracked games and their last-known sale status
+- **➕ Add Game** - search for a game by name, tap the right match, then
+  choose how you want to be alerted:
+  - 🔔 **Any discount** - notify the moment it's on sale at all
+  - 📊 **% threshold** - only notify at, say, 30% off or more
+  - 💰 **Price threshold** - only notify once it drops under a price you set
+  - 🎯 **Both** - either condition triggers the alert
+- **🔄 Check Now** - check all your tracked games against Steam live, right
+  now, instead of waiting for the next daily check. Discounted games are
+  shown first, sorted by biggest discount, with a direct "Buy now!" link
+  for anything 50%+ off.
+- **➖ Remove Game** - tap a game to stop tracking it
+- **🗑 Clear List** - remove everything you're tracking at once (asks you
+  to confirm first)
+- **🌍 Set Region** - your current region shows as a flag right on the
+  button; tap to change it any time
 
-- 10 tracked games per user
-- Price checks every 24 hours
-- Region is set once per user and applies to all their tracked games
+The bot checks prices once a day and only notifies you the first time your
+alert condition becomes true - not every single day a sale happens to still
+be running.
 
-## Notes on the unofficial Steam endpoints
+## Limits
 
-`storesearch` and `appdetails` are not officially documented/supported by
-Valve, but they're the same endpoints Steam's own store website uses, so
-they're stable in practice. If Valve ever changes them, the fix is isolated
-to `lib/steam.js`.
+- Up to 10 tracked games per person
+- Prices checked once daily
+- To change a game's alert threshold, remove it and add it again with new
+  settings
+
+## A note on data
+
+The bot only stores what it needs to do its job: your Telegram chat ID,
+your chosen region, and the games/thresholds you set up. Nothing else.
+
+## Feedback / issues
+
+Found a bug or have an idea? [however you want people to reach you]
