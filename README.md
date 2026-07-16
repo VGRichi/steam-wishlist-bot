@@ -1,4 +1,4 @@
-# Steam Wishlist Bot 🧞
+# Steam Wishlist Bot 
 
 A free Telegram bot that watches your Steam wishlist and pings you the
 moment a game goes on sale - with custom alert rules per game, so you only
