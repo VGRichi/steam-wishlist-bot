@@ -50,4 +50,4 @@ your chosen region, and the games/thresholds you set up. Nothing else.
 
 ## Feedback / issues
 
-Found a bug or have an idea? [however you want people to reach you]
+Found a bug or have an idea? Contact me!
